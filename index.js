@@ -16,18 +16,29 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 async function getDecisionOutcome(decision, time, intensity) {
   const prompt = `
-  You are an AI that outputs short outcomes.
-  The outcome must be concise but realistic.
-  It should describe the result or future state
-  of the given decision and time span.
+You are an AI that outputs JSON only.
+Your job is to suggest a short realistic outcome.
+If time or intensity are missing or "general", suggest suitable defaults.
 
-  Examples:
-  Decision: "coding", Time: "1 year" → "able to build small projects, comfortable with basic programming, possibly a junior developer"
-  Decision: "exercise", Time: "6 months" → "noticeable improvement in strength and stamina, leaner body, healthier lifestyle"
-  Decision: "learn guitar", Time: "2 years" → "can play songs smoothly, good sense of rhythm, considered an intermediate guitarist"
-  Decision: "fasting", Time: "
-  Now generate one outcome:
-  Decision: "${decision}", Time: "${time}", Intensity: "${intensity}
+Output format (strict JSON):
+{
+  "outcome": "short sentence (max 12 words)",
+  "time": "final time used",
+  "intensity": "final intensity used"
+}
+
+Examples:
+Input: Decision: "coding", Time: "1 year", Intensity: "daily 2h"
+Output: {"outcome":"can build projects, solid basics, problem-solving improved","time":"1 year","intensity":"daily 2h"}
+
+Input: Decision: "exercise", Time: "", Intensity: ""
+Output: {"outcome":"better stamina and health improvements","time":"6 months","intensity":"3 times a week"}
+
+Input: Decision: "learn guitar", Time: "general", Intensity: ""
+Output: {"outcome":"can play songs comfortably, intermediate guitarist","time":"2 years","intensity":"weekly practice"}
+
+Now generate one outcome:
+Decision: "${decision}", Time: "${time}", Intensity: "${intensity}"
   `;
 
   const response = await ai.models.generateContent({
@@ -35,8 +46,16 @@ async function getDecisionOutcome(decision, time, intensity) {
     contents: prompt,
   });
 
-  // extract text from new SDK response shape
-  return response.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  const raw = response.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}";
+  let parsed;
+
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    parsed = { outcome: raw.trim(), time, intensity };
+  }
+
+  return parsed;
 }
 
 // test route
@@ -44,7 +63,7 @@ app.get("/", async (req, res) => {
   try {
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
-      contents: "Hello, say something random!",
+      contents: "Say something random in JSON: {\"msg\": \"...\"}",
     });
     const text = response.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
     res.send(text);
@@ -56,19 +75,18 @@ app.get("/", async (req, res) => {
 
 // API endpoint
 app.post("/decision", async (req, res) => {
-  const { decision, time, intensity } = req.body;
+  let { decision, time, intensity } = req.body;
 
   if (!decision) {
     return res.status(400).json({ error: "decision is required" });
   }
-  if(!time) {
-    time = "generally"
-  }
-  if(!intensity) intensity = "generally"
+
+  if (!time) time = "general";
+  if (!intensity) intensity = "general";
 
   try {
-    const outcome = await getDecisionOutcome(decision, time, intensity);
-    res.json({ decision, time, intensity, outcome });
+    const result = await getDecisionOutcome(decision, time, intensity);
+    res.json(result); // already structured with updated time/intensity
   } catch (err) {
     console.error("Error:", err?.message || err);
     res.status(500).json({ error: "Something went wrong" });
